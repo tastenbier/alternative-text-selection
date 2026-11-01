@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Text Selection Demo</title>
+    <style>
+        :root {
+            color-scheme: light;
+            font-family: system-ui, sans-serif;
+            background: #f6f6f6;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            height: 100vh;
+            margin: 0;
+            display: grid;
+            grid-template: ". content ." / 1fr minmax(22rem, 35%) 1fr;
+            place-items: center;
+        }
+
+        main {
+            grid-area: content;
+            width: 100%;
+            margin: 3rem 0;
+        }
+
+        h1 {
+            font-size: 1.4rem;
+        }
+
+        h2 {
+            font-size: 1rem;
+        }
+
+        p {
+            color: #6e6e6e;
+            line-height: 1.5;
+        }
+
+        section {
+            margin-top: 2rem;
+        }
+
+        pre {
+            width: 100%;
+            margin: 0;
+            padding: .9rem 1rem;
+            border: 1px solid #cbcbcb;
+            border-radius: .5rem;
+            background: white;
+            overflow-x: scroll;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Text Selection Demo</h1>
+    <p>Drag-select each example via mouse cursor to compare behavior.</p>
+
+    <section>
+        <h2>Default Behavior</h2>
+        <pre id="demo-default"><code></code></pre>
+    </section>
+
+    <section>
+        <h2>Scroll Offset</h2>
+        <pre id="demo-scrolloff"><code></code></pre>
+    </section>
+
+    <section>
+        <h2>Selection-synced Scrolling</h2>
+        <pre id="demo-synced-scroll"><code></code></pre>
+    </section>
+</main>
+
+<script>
+  const line = 'curl --request POST https://example.invalid/api/v1/demo-endpoint --header "Content-Type: application/json" --header "Authorization: Beer token" --data \'{"message":"Here is a long message that will allow you to test the horizontal scrolling behavior."}\'';
+
+  document.querySelectorAll('pre code').forEach(code => code.textContent = line);
+
+  const demoSyncedScroll = document.getElementById('demo-synced-scroll');
+  const syncedCode = demoSyncedScroll.querySelector('code');
+  const textNode = syncedCode.firstChild;
+  const length = line.length;
+  let drag = null;
+
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+  function dragGeometry(box, code) {
+    const boxRect = box.getBoundingClientRect();
+    const textRect = code.getBoundingClientRect();
+    const style = getComputedStyle(box);
+    return {
+      textLeft: textRect.left,
+      charWidth: textRect.width / length,
+      left: boxRect.left + box.clientLeft + parseFloat(style.paddingLeft),
+      right: boxRect.left + box.clientLeft + box.clientWidth - parseFloat(style.paddingRight)
+    };
+  }
+
+  function updateDrag(clientX) {
+    const {anchor, startX, startScroll, left, right} = drag;
+    const x = clamp(clientX, left, right);
+    const movingRight = x >= startX;
+    const edge = movingRight ? right : left;
+    const progress = Math.abs(x - startX) / Math.max(1, Math.abs(edge - startX));
+    const endOffset = movingRight ? length : 0;
+    const endScroll = movingRight ? demoSyncedScroll.scrollWidth - demoSyncedScroll.clientWidth : 0;
+    const focus = Math.round(anchor + (endOffset - anchor) * progress);
+
+    window.getSelection().setBaseAndExtent(textNode, anchor, textNode, focus);
+    demoSyncedScroll.scrollLeft = startScroll + (endScroll - startScroll) * progress;
+  }
+
+  demoSyncedScroll.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.pointerType === 'touch' || !syncedCode.contains(event.target)) return;
+    event.preventDefault();
+
+    const {textLeft, charWidth, left, right} = dragGeometry(demoSyncedScroll, syncedCode);
+    const anchor = clamp(Math.round((event.clientX - textLeft) / charWidth), 0, length);
+
+    window.getSelection().setBaseAndExtent(textNode, anchor, textNode, anchor);
+    drag = {
+      anchor,
+      startX: clamp(event.clientX, left, right),
+      startScroll: demoSyncedScroll.scrollLeft,
+      left,
+      right
+    };
+    demoSyncedScroll.setPointerCapture(event.pointerId);
+  });
+
+  demoSyncedScroll.addEventListener('pointermove', event => {
+    if (!drag) return;
+    event.preventDefault();
+    updateDrag(event.clientX);
+  });
+
+  function finishDrag() {
+    drag = null;
+  }
+
+  demoSyncedScroll.addEventListener('pointerup', finishDrag);
+  demoSyncedScroll.addEventListener('pointercancel', finishDrag);
+  demoSyncedScroll.addEventListener('lostpointercapture', finishDrag);
+
+  // Scrolloff box: scroll under a held pointer while keeping a 20% text margin.
+  (() => {
+    const box = document.getElementById('demo-scrolloff');
+    const code = box.querySelector('code');
+    const textNode = code.firstChild;
+    let drag = null;
+    let outsideDragPointerId = null;
+    const preventNativeSelection = event => event.preventDefault();
+
+    function scrolloffEdge(x) {
+      const {startX, left, right} = drag;
+      const movingRight = x >= startX;
+      const edgeWidth = (right - left) * 0.20;
+      const trigger = movingRight
+        ? Math.max(startX, right - edgeWidth)
+        : Math.min(startX, left + edgeWidth);
+      const edge = movingRight ? right : left;
+      const active = movingRight ? x > trigger : x < trigger;
+      const pressure = active ? (x - trigger) / (edge - trigger) : 0;
+      return {movingRight, trigger, active, pressure};
+    }
+
+    function renderScrolloff(edge) {
+      if (edge.active) {
+        const desiredScroll = drag.focusPx - (edge.trigger - drag.contentLeft);
+        const nextScroll = edge.movingRight
+          ? Math.max(box.scrollLeft, desiredScroll)
+          : Math.min(box.scrollLeft, desiredScroll);
+        box.scrollLeft = clamp(nextScroll, 0, box.scrollWidth - box.clientWidth);
+      }
+      const focus = clamp(Math.round(drag.focusPx / drag.charWidth), 0, length);
+      window.getSelection().setBaseAndExtent(drag.anchorNode, drag.anchorOffset, textNode, focus);
+    }
+
+    function stopAutoScroll() {
+      if (drag?.frameId != null) cancelAnimationFrame(drag.frameId);
+      if (drag) {
+        drag.frameId = null;
+        drag.lastFrame = null;
+      }
+    }
+
+    function autoScrollFrame(time) {
+      if (!drag) return;
+      drag.frameId = null;
+      const edge = scrolloffEdge(drag.pointerX);
+      const atEnd = edge.movingRight
+        ? drag.focusPx >= length * drag.charWidth
+        : drag.focusPx <= 0;
+      if (!edge.active || atEnd) return;
+
+      const elapsed = drag.lastFrame === null ? 0 : Math.min((time - drag.lastFrame) / 1000, 0.05);
+      drag.lastFrame = time;
+      const direction = edge.movingRight ? 1 : -1;
+      drag.focusPx = clamp(drag.focusPx + direction * 900 * edge.pressure * elapsed,
+        0, length * drag.charWidth);
+      renderScrolloff(edge);
+      drag.frameId = requestAnimationFrame(autoScrollFrame);
+    }
+
+    function updateDrag(clientX) {
+      const x = clamp(clientX, drag.left, drag.right);
+      const edge = scrolloffEdge(x);
+      if (edge.active) {
+        drag.focusPx += x - drag.pointerX;
+      } else {
+        drag.focusPx = x - drag.contentLeft + box.scrollLeft;
+      }
+      drag.focusPx = clamp(drag.focusPx, 0, length * drag.charWidth);
+      drag.pointerX = x;
+      renderScrolloff(edge);
+
+      if (!edge.active) {
+        stopAutoScroll();
+      } else if (drag.frameId === null) {
+        drag.lastFrame = null;
+        drag.frameId = requestAnimationFrame(autoScrollFrame);
+      }
+    }
+
+    function beginDrag(event, anchorNode = textNode, anchorOffset = null, external = false) {
+      const {textLeft, charWidth, left, right} = dragGeometry(box, code);
+      const startOffset = clamp(Math.round((event.clientX - textLeft) / charWidth), 0, length);
+      if (anchorOffset === null) anchorOffset = startOffset;
+      const startX = clamp(event.clientX, left, right);
+
+      window.getSelection().setBaseAndExtent(anchorNode, anchorOffset, textNode, startOffset);
+      drag = {
+        pointerId: event.pointerId, anchorNode, anchorOffset, startX,
+        left, right, charWidth, external, contentLeft: textLeft + box.scrollLeft,
+        focusPx: startOffset * charWidth, pointerX: startX, frameId: null, lastFrame: null
+      };
+      if (external) document.addEventListener('mousemove', preventNativeSelection, true);
+      box.setPointerCapture(event.pointerId);
+    }
+
+    document.addEventListener('pointerdown', event => {
+      outsideDragPointerId = event.button === 0 && event.pointerType !== 'touch' && !box.contains(event.target)
+        ? event.pointerId : null;
+    }, true);
+
+    function clearOutsideDrag(event) {
+      if (outsideDragPointerId === event.pointerId) outsideDragPointerId = null;
+    }
+
+    document.addEventListener('pointerup', clearOutsideDrag);
+    document.addEventListener('pointercancel', clearOutsideDrag);
+
+    box.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || event.pointerType === 'touch') return;
+      event.preventDefault();
+      beginDrag(event);
+    });
+
+    box.addEventListener('pointermove', event => {
+      if (!drag && outsideDragPointerId === event.pointerId && (event.buttons & 1)) {
+        const selection = window.getSelection();
+        if (selection.anchorNode && !box.contains(selection.anchorNode)) {
+          beginDrag(event, selection.anchorNode, selection.anchorOffset, true);
+        }
+      }
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      updateDrag(event.clientX);
+    });
+
+    function finishDrag(event) {
+      if (drag?.pointerId !== event.pointerId) return;
+      stopAutoScroll();
+      if (drag.external) document.removeEventListener('mousemove', preventNativeSelection, true);
+      drag = null;
+    }
+
+    box.addEventListener('pointerup', finishDrag);
+    box.addEventListener('pointercancel', finishDrag);
+    box.addEventListener('lostpointercapture', finishDrag);
+  })();
+</script>
+</body>
+</html>
